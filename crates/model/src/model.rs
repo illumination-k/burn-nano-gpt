@@ -66,4 +66,35 @@ impl<B: Backend> NanoGpt<B> {
         let x = self.ln_final.forward(x);
         self.head.forward(x)
     }
+
+    /// Greedy autoregressive decode: starting from `prompt`
+    /// (`[batch, seq]`), repeatedly take the argmax over the final
+    /// position's logits and append it. Returns the full
+    /// `[batch, seq + n_new_tokens]` token tensor.
+    ///
+    /// When the running context exceeds `block_size`, the oldest tokens
+    /// are dropped — the positional embedding only covers a `block_size`
+    /// window.
+    pub fn generate(&self, prompt: Tensor<B, 2, Int>, n_new_tokens: usize) -> Tensor<B, 2, Int> {
+        let mut context = prompt;
+        for _ in 0..n_new_tokens {
+            let [batch, seq] = context.dims();
+            let cropped = if seq > self.block_size {
+                context
+                    .clone()
+                    .slice([0..batch, seq - self.block_size..seq])
+            } else {
+                context.clone()
+            };
+            let logits = self.forward(cropped);
+            let [_, t, _] = logits.dims();
+
+            // Last position's logits: [batch, vocab]. argmax along vocab → [batch, 1].
+            let last = logits.slice([0..batch, t - 1..t]).squeeze_dim::<2>(1);
+            let next = last.argmax(1);
+
+            context = Tensor::cat(vec![context, next], 1);
+        }
+        context
+    }
 }
