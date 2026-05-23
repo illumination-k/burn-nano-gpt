@@ -12,9 +12,12 @@
 //! - `BURN_NANO_GPT_CACHE` — directory for the cached corpus (default `./.cache`)
 //! - `BURN_NANO_GPT_PROMPT` — generation prompt (default `"Hello"`)
 //! - `BURN_NANO_GPT_GENERATE` — number of tokens to generate (default 200)
+//! - `BURN_NANO_GPT_LOSS_CSV` — if set, write per-step `step,loss` rows here
 
 #![allow(clippy::print_stdout)]
 
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -32,6 +35,7 @@ use tokenizer::{CharTokenizer, Tokenizer};
 use train::{sample_batch, train_step};
 
 type Backend = Autodiff<NdArray<f32>>;
+type InferenceBackend = <Backend as burn::tensor::backend::AutodiffBackend>::InnerBackend;
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -56,6 +60,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let seed = env_u64("BURN_NANO_GPT_SEED", 0);
     let prompt_text = std::env::var("BURN_NANO_GPT_PROMPT").unwrap_or_else(|_| "Hello".to_string());
     let n_generate = env_usize("BURN_NANO_GPT_GENERATE", 200);
+    let loss_csv = std::env::var_os("BURN_NANO_GPT_LOSS_CSV").map(PathBuf::from);
 
     // 1. Corpus + tokenizer.
     let cache_dir: PathBuf = std::env::var_os("BURN_NANO_GPT_CACHE")
@@ -83,17 +88,40 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     let mut model = config.init::<Backend>(&device);
 
-    // 3. Optimizer.
+    // 3. Sample from the random-initialised model so the README can show a
+    //    before/after comparison.
+    let untrained_sample = greedy_generate(
+        &model.valid(),
+        &tokenizer,
+        &prompt_text,
+        n_generate,
+        &device,
+    )?;
+    println!("\n--- before training (random init) ---");
+    println!("prompt:    {prompt_text:?}");
+    println!("generated: {untrained_sample:?}");
+
+    // 4. Optimizer.
     let mut optimizer = AdamWConfig::new().init();
     let lr = 3e-4;
 
-    // 4. Train loop. Each iteration samples a fresh random batch; nano-gpt
+    // 5. Train loop. Each iteration samples a fresh random batch; nano-gpt
     //    treats "epoch" as a fuzzy concept and reports per-iteration loss.
     let mut rng = StdRng::seed_from_u64(seed);
     let start = Instant::now();
 
+    let mut csv_writer = loss_csv
+        .as_ref()
+        .map(|path| -> Result<_, Box<dyn std::error::Error>> {
+            let file = File::create(path)?;
+            let mut w = BufWriter::new(file);
+            writeln!(w, "step,loss")?;
+            Ok(w)
+        })
+        .transpose()?;
+
     println!(
-        "training: iters={iters}, batch={batch_size}, block={block_size}, lr={lr}, vocab={}",
+        "\ntraining: iters={iters}, batch={batch_size}, block={block_size}, lr={lr}, vocab={}",
         tokenizer.vocab_size(),
     );
 
@@ -103,6 +131,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let (next_model, loss) = train_step(model, &mut optimizer, inputs, targets, lr);
         model = next_model;
 
+        if let Some(w) = csv_writer.as_mut() {
+            writeln!(w, "{step},{loss}")?;
+        }
+
         if step == 1 || step % log_every == 0 || step == iters {
             let elapsed = start.elapsed().as_secs_f32();
             tracing::info!(step, iters, loss, elapsed_s = elapsed, "train step");
@@ -110,23 +142,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 5. Say hello — greedy decode from the prompt on the inference (non-
-    //    autodiff) view of the trained weights.
-    let inference_model = model.valid();
-    let generated = greedy_generate(
-        &inference_model,
+    if let Some(mut w) = csv_writer {
+        w.flush()?;
+    }
+
+    // 6. Say hello — greedy decode from the prompt on the inference
+    //    (non-autodiff) view of the trained weights.
+    let trained_sample = greedy_generate(
+        &model.valid(),
         &tokenizer,
         &prompt_text,
         n_generate,
         &device,
     )?;
-    println!("\nprompt:    {prompt_text:?}");
-    println!("generated: {generated:?}");
+    println!("\n--- after training ---");
+    println!("prompt:    {prompt_text:?}");
+    println!("generated: {trained_sample:?}");
 
     Ok(())
 }
-
-type InferenceBackend = <Backend as burn::tensor::backend::AutodiffBackend>::InnerBackend;
 
 fn greedy_generate(
     model: &NanoGpt<InferenceBackend>,
