@@ -1,0 +1,21 @@
+[package]
+name = "train"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+burn.workspace = true
+dataset = { path = "../dataset", version = "0.1" }
+model = { path = "../model", version = "0.1" }
+rand.workspace = true
+tokenizer = { path = "../tokenizer", version = "0.1" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "train"
+path = "src/main.rs"
+
+[lints]
+workspace = true
