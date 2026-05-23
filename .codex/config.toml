@@ -1,0 +1,6 @@
+[features]
+# Ensure Codex lifecycle hooks are enabled for this repository.
+codex_hooks = true
+
+[shell_environment_policy.set]
+MISE_ENV = "base,rust,security"
