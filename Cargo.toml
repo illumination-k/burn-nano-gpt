@@ -11,7 +11,7 @@ repository = "https://github.com/illumination-k/burn-nano-gpt"
 [workspace.dependencies]
 burn = { version = "0.21", default-features = false, features = ["std", "wgpu", "ndarray", "autodiff"] }
 burn-dataset = { version = "0.21", default-features = false }
-rand = "0.9"
+rand = "0.10"
 tempfile = "3"
 thiserror = "2"
 tracing = "0.1"

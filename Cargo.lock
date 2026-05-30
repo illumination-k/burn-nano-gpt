@@ -5358,7 +5358,7 @@ dependencies = [
  "burn",
  "dataset",
  "model",
- "rand 0.9.4",
+ "rand 0.10.1",
  "tokenizer",
  "tracing",
  "tracing-subscriber",
